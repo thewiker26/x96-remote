@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
 """Relais X96 Remote : sert la page web et traduit les boutons en commandes ADB.
-Aucune dépendance Python. Variables : ADB_TARGET (def. localhost:5555), PORT (def. 8080), ADB (def. adb)."""
-import json, os, re, shlex, subprocess, time, urllib.request, urllib.parse
+Aucune dépendance obligatoire.
+Variables : ADB_TARGET (def. localhost:5555), PORT (def. 8080), ADB (def. adb),
+            X96_PIN (code facultatif demandé par la page), ADB_MODE (bin|py)."""
+import json, os, re, shlex, subprocess, sys, threading, time, unicodedata
+import urllib.request, urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 ADB = os.environ.get("ADB", "adb")
 TARGET = os.environ.get("ADB_TARGET", "localhost:5555")
 PORT = int(os.environ.get("PORT", "8080"))
-WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
-IPTV = "https://iptv-org.github.io/iptv/"
+PIN = os.environ.get("X96_PIN", "")
+HERE = os.path.dirname(os.path.abspath(__file__))
+WEB = os.path.join(HERE, "web")
+IPTV = os.environ.get("IPTV_BASE", "https://iptv-org.github.io/iptv/")
 
 KEYS = {"up": 19, "down": 20, "left": 21, "right": 22, "ok": 23, "back": 4, "home": 3,
-        "menu": 82, "power": 26, "volup": 24, "voldown": 25, "mute": 164, "play": 85,
-        "ff": 90, "rw": 89, "chup": 166, "chdown": 167, "info": 165, "del": 67,
-        **{str(i): 7 + i for i in range(10)}}
+        "menu": 82, "power": 26, "sleep": 223, "wake": 224, "volup": 24, "voldown": 25,
+        "mute": 164, "play": 85, "ff": 90, "rw": 89, "next": 87, "prev": 88,
+        "chup": 166, "chdown": 167, "info": 165, "del": 67, "enter": 66, "search": 84,
+        "recent": 187, "tab": 61, **{str(i): 7 + i for i in range(10)}}
 APPS = {"settings": "am start -a android.settings.SETTINGS",
-        "wifi": "am start -a android.settings.WIFI_SETTINGS"}
+        "wifi": "am start -a android.settings.WIFI_SETTINGS",
+        "display": "am start -a android.settings.DISPLAY_SETTINGS",
+        "sound": "am start -a android.settings.SOUND_SETTINGS",
+        "bluetooth": "am start -a android.settings.BLUETOOTH_SETTINGS"}
+
+# ---------------------------------------------------------------- ADB
 
 def _bin_ok():
     try:
@@ -23,9 +35,10 @@ def _bin_ok():
     except Exception:
         return False
 
-# Mode "bin" : programme adb. Mode "py" : ADB en Python pur (paquet adb-shell), utile si adb ne démarre pas.
+# Mode "bin" : programme adb. Mode "py" : ADB en Python pur (paquet adb-shell), si adb ne démarre pas.
 MODE = os.environ.get("ADB_MODE") or ("bin" if _bin_ok() else "py")
 _dev = None
+_lock = threading.Lock()
 
 def _py_connect():
     global _dev
@@ -54,17 +67,22 @@ def connect():
         return False, str(e)
 
 def is_connected():
-    if MODE == "py":
-        return _dev is not None and _dev.available
-    p = subprocess.run([ADB, "-s", TARGET, "get-state"], capture_output=True, text=True, timeout=10)
-    return p.returncode == 0 and "device" in p.stdout
+    try:
+        if MODE == "py":
+            return _dev is not None and _dev.available
+        p = subprocess.run([ADB, "-s", TARGET, "get-state"], capture_output=True, text=True, timeout=10)
+        return p.returncode == 0 and "device" in p.stdout
+    except Exception:
+        return False
 
 def _run(cmd):
     if MODE == "py":
-        if _dev is None or not _dev.available:
-            ok, out = connect()
-            if not ok: return False, out
-        return True, str(_dev.shell(cmd)).strip()
+        with _lock:
+            if _dev is None or not _dev.available:
+                ok, out = connect()
+                if not ok:
+                    return False, out
+            return True, str(_dev.shell(cmd)).strip()
     p = subprocess.run([ADB, "-s", TARGET, "shell", cmd], capture_output=True, text=True, timeout=10)
     return p.returncode == 0, (p.stdout + p.stderr).strip()
 
@@ -78,77 +96,49 @@ def shell(cmd):
     except Exception as e:
         return False, str(e)
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# ---------------------------------------------------------------- Actions
 
-def _git(*a):
-    p = subprocess.run(["git", "-C", HERE, *a], capture_output=True, text=True, timeout=90)
-    return p.returncode == 0, (p.stdout + p.stderr).strip()
+def keys(name, count=1):
+    code = KEYS.get(name)
+    if code is None:
+        return False, "touche inconnue"
+    count = max(1, min(int(count), 60))
+    return shell("input keyevent " + " ".join([str(code)] * count))
 
-def update():
-    """git pull ; relance le relais si server.py a changé. Les fichiers web sont relus à chaque requête."""
-    ok, old = _git("rev-parse", "HEAD")
-    ok2, out = _git("pull", "--ff-only")
-    if not ok2:
-        return False, out, False
-    _, new = _git("rev-parse", "HEAD")
-    restart = False
-    if old != new:
-        _, files = _git("diff", "--name-only", old, new)
-        restart = "server.py" in files.split()
-    return True, ("Mis à jour" if old != new else "Déjà à jour"), restart
+def clean_text(t):
+    """input text ne gère que l'ASCII : accents retirés, caractères exotiques ignorés."""
+    t = unicodedata.normalize("NFKD", str(t))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = t.replace("’", "'").replace("“", '"').replace("”", '"')
+    return "".join(c for c in t if " " <= c <= "~" and c != "%")[:300]
 
-def restart_soon():
-    import threading, sys
-    threading.Timer(1.0, lambda: os.execv(sys.executable, [sys.executable] + sys.argv)).start()
+def send_text(t):
+    t = clean_text(t)
+    if not t:
+        return True, ""
+    return shell("input text " + shlex.quote(t.replace(" ", "%s")))
 
-_cache = {}
-def fetch(url, ttl=3600):
-    t = _cache.get(url)
-    if t and time.time() - t[0] < ttl:
-        return t[1]
-    with urllib.request.urlopen(url, timeout=25) as r:
-        data = r.read().decode("utf-8", "replace")
-    _cache[url] = (time.time(), data)
-    return data
+_size = None
+def screen_size():
+    global _size
+    if _size:
+        return _size
+    ok, out = shell("wm size")
+    m = re.findall(r"(\d{3,5})x(\d{3,5})", out if ok else "")
+    _size = (int(m[-1][0]), int(m[-1][1])) if m else (1920, 1080)
+    return _size
 
-def parse_m3u(text):
-    out, meta = [], None
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("#EXTINF"):
-            name = line.rsplit(",", 1)[-1].strip()
-            g = lambda k: (re.search(k + r'="([^"]*)"', line) or [None, ""])[1]
-            meta = {"name": name, "logo": g("tvg-logo"), "group": g("group-title")}
-        elif line and not line.startswith("#") and meta:
-            meta["url"] = line
-            out.append(meta)
-            meta = None
-    return out
+def _frac(v):
+    return max(0.0, min(1.0, float(v)))
 
-FOOT = re.compile(r"foot|soccer|f[uú]tbol|calcio|ligue|liga|premier|champions|uefa|fifa|bein|dazn|bundesliga|sport ?5|sport ?1|one sport|eleven|sky sport|canal\+? ?sport|rmc|eurosport|arena|supersport|\bsport", re.I)
+def tap(x, y):
+    w, h = screen_size()
+    return shell(f"input tap {int(_frac(x) * (w - 1))} {int(_frac(y) * (h - 1))}")
 
-def channels(country, category, q, limit, mode=""):
-    if mode in ("foot", "sport"):
-        items = parse_m3u(fetch(IPTV + "categories/sports.m3u"))
-        if country:
-            try:
-                items += parse_m3u(fetch(IPTV + f"countries/{country}.m3u"))
-            except Exception:
-                pass
-        if mode == "foot":
-            items = [c for c in items if FOOT.search(c["name"])]
-        seen, out = set(), []
-        for c in items:
-            if c["url"] not in seen:
-                seen.add(c["url"]); out.append(c)
-        items = out
-    else:
-        src = f"categories/{category}.m3u" if category else f"countries/{country}.m3u"
-        items = parse_m3u(fetch(IPTV + src))
-    q = q.lower()
-    if q:
-        items = [c for c in items if q in c["name"].lower()]
-    return items[:limit]
+def swipe(x1, y1, x2, y2, ms=300):
+    w, h = screen_size()
+    p = [int(_frac(x1) * (w - 1)), int(_frac(y1) * (h - 1)), int(_frac(x2) * (w - 1)), int(_frac(y2) * (h - 1))]
+    return shell("input swipe %d %d %d %d %d" % (*p, max(50, min(int(ms), 1500))))
 
 def launch_app(pkg):
     for cat in ("android.intent.category.LAUNCHER", "android.intent.category.LEANBACK_LAUNCHER"):
@@ -171,8 +161,116 @@ def open_stream(url, package=""):
         cmd += f" -p {package}"
     return shell(cmd)
 
+# ---------------------------------------------------------------- Mise à jour
+
+def _git(*a):
+    p = subprocess.run(["git", "-C", HERE, *a], capture_output=True, text=True, timeout=60)
+    return p.returncode == 0, (p.stdout + p.stderr).strip()
+
+def version():
+    ok, out = _git("rev-parse", "--short", "HEAD")
+    return out if ok else "?"
+
+def update():
+    """git pull ; relance le relais si server.py a changé. Les fichiers web sont relus à chaque requête."""
+    ok, old = _git("rev-parse", "HEAD")
+    ok2, out = _git("pull", "--ff-only")
+    if not ok2:
+        return False, out, False
+    _, new = _git("rev-parse", "HEAD")
+    restart = False
+    if old != new:
+        _, files = _git("diff", "--name-only", old, new)
+        restart = "server.py" in files.split()
+    return True, ("Mis à jour" if old != new else "Déjà à jour"), restart
+
+def restart_soon():
+    threading.Timer(1.0, lambda: os.execv(sys.executable, [sys.executable] + sys.argv)).start()
+
+# ---------------------------------------------------------------- Chaînes iptv-org
+
+_cache = {}
+def fetch(url, ttl=3600):
+    t = _cache.get(url)
+    if t and time.time() - t[0] < ttl:
+        return t[1]
+    with urllib.request.urlopen(url, timeout=25) as r:
+        data = r.read().decode("utf-8", "replace")
+    _cache[url] = (time.time(), data)
+    return data
+
+def parse_m3u(text):
+    out, meta = [], None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXTINF"):
+            name = line.rsplit(",", 1)[-1].strip()
+            g = lambda k: (re.search(k + r'="([^"]*)"', line) or [None, ""])[1]
+            meta = {"name": name, "logo": g("tvg-logo"), "group": g("group-title"), "id": g("tvg-id")}
+        elif line and not line.startswith("#") and meta:
+            meta["url"] = line
+            out.append(meta)
+            meta = None
+    return out
+
+FOOT = re.compile(r"foot|soccer|f[uú]tbol|calcio|ligue|liga|premier|champions|uefa|fifa|bein|dazn|bundesliga|sport ?5|sport ?1|one sport|eleven|sky sport|canal\+? ?sport|rmc|eurosport|arena|supersport|\bsport", re.I)
+CATEGORIES = {"news", "kids", "movies", "music", "sports", "documentary", "entertainment", "general", "series", "comedy", "culture", "religious"}
+
+def channels(country, category, q, limit, mode=""):
+    country = (country or "").lower()
+    if mode in ("foot", "sport"):
+        items = parse_m3u(fetch(IPTV + "categories/sports.m3u"))
+        if country:
+            try:
+                items += parse_m3u(fetch(IPTV + f"countries/{country}.m3u"))
+            except Exception:
+                pass
+        if mode == "foot":
+            items = [c for c in items if FOOT.search(c["name"])]
+    elif mode in CATEGORIES:
+        items = parse_m3u(fetch(IPTV + f"categories/{mode}.m3u"))
+        if country:
+            rx = re.compile(r"\.%s(@|$)" % re.escape(country), re.I)
+            items = [c for c in items if rx.search(c.get("id", ""))]
+    else:
+        src = f"categories/{category}.m3u" if category else f"countries/{country or 'fr'}.m3u"
+        items = parse_m3u(fetch(IPTV + src))
+    seen, out = set(), []
+    for c in items:
+        if c["url"] not in seen:
+            seen.add(c["url"])
+            out.append(c)
+    q = (q or "").lower()
+    if q:
+        out = [c for c in out if q in c["name"].lower()]
+    return out[:limit]
+
+_alive = {}
+def check_url(u):
+    c = _alive.get(u)
+    if c and time.time() - c[0] < 1800:
+        return c[1]
+    ok = False
+    try:
+        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0", "Range": "bytes=0-1023"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            head = r.read(1024)
+            ok = r.status in (200, 206) and (b"#EXTM3U" in head if u.split("?")[0].endswith(".m3u8") else True)
+    except Exception:
+        ok = False
+    _alive[u] = (time.time(), ok)
+    return ok
+
+def check_many(urls):
+    urls = [u for u in urls if isinstance(u, str) and re.match(r"^https?://", u)][:30]
+    with ThreadPoolExecutor(10) as ex:
+        return dict(zip(urls, ex.map(check_url, urls)))
+
+# ---------------------------------------------------------------- HTTP
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+
     def send(self, code, body, ctype="application/json"):
         b = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
@@ -182,14 +280,21 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def authorized(self):
+        return not PIN or self.headers.get("X-Pin", "") == PIN
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
-        q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query, keep_blank_values=True).items()}
         try:
             if u.path == "/api/status":
-                return self.send(200, {"connected": is_connected(), "target": TARGET, "mode": MODE})
+                return self.send(200, {"connected": is_connected(), "target": TARGET, "mode": MODE,
+                                       "version": VERSION, "pin_required": bool(PIN), "authorized": self.authorized()})
             if u.path == "/api/channels":
-                items = channels(q.get("country", "fr"), q.get("category", ""), q.get("q", ""), int(q.get("limit", "300")), q.get("mode", ""))
+                if not self.authorized():
+                    return self.send(401, {"ok": False, "error": "pin"})
+                items = channels(q.get("country", "fr"), q.get("category", ""), q.get("q", ""),
+                                 int(q.get("limit", "300")), q.get("mode", ""))
                 return self.send(200, items)
         except Exception as e:
             return self.send(502, {"ok": False, "error": str(e)})
@@ -202,48 +307,63 @@ class H(BaseHTTPRequestHandler):
         self.send(200, open(path, "rb").read(), ct)
 
     def do_POST(self):
+        global VERSION
         n = int(self.headers.get("Content-Length") or 0)
         try:
+            if not self.authorized():
+                return self.send(401, {"ok": False, "error": "pin"})
             d = json.loads(self.rfile.read(n) or b"{}")
             p = self.path
             if p == "/api/connect":
                 ok, out = connect()
             elif p == "/api/update":
                 ok, out, rs = update()
-                if rs: restart_soon()
-                return self.send(200 if ok else 500, {"ok": ok, "out": out, "restart": rs})
+                VERSION = version()
+                if rs:
+                    restart_soon()
+                return self.send(200 if ok else 500, {"ok": ok, "out": out, "restart": rs, "version": VERSION})
             elif p == "/api/key":
-                code = KEYS.get(d.get("key"))
-                if code is None: return self.send(400, {"ok": False, "error": "touche inconnue"})
-                ok, out = shell(f"input keyevent {code}")
+                ok, out = keys(d.get("key"), d.get("count", 1))
+                if not ok and out == "touche inconnue":
+                    return self.send(400, {"ok": False, "error": out})
             elif p == "/api/text":
-                t = str(d.get("text", ""))
-                t = re.sub(r"[^A-Za-z0-9@._\-+ ]", "", t).replace(" ", "%s")
-                ok, out = shell(f"input text {shlex.quote(t)}")
+                ok, out = send_text(d.get("text", ""))
+            elif p == "/api/tap":
+                ok, out = tap(d.get("x", .5), d.get("y", .5))
+            elif p == "/api/swipe":
+                ok, out = swipe(d.get("x1", .5), d.get("y1", .5), d.get("x2", .5), d.get("y2", .5), d.get("ms", 300))
             elif p == "/api/open":
                 ok, out = open_stream(str(d.get("url", "")), str(d.get("package", "")))
             elif p == "/api/launch":
                 pkg = str(d.get("package", ""))
-                if pkg in APPS: ok, out = shell(APPS[pkg])
+                if pkg in APPS:
+                    ok, out = shell(APPS[pkg])
                 elif re.match(r"^[A-Za-z0-9_.]+$", pkg):
                     ok, out = launch_app(pkg)
-                else: ok, out = False, "package invalide"
+                else:
+                    ok, out = False, "package invalide"
             elif p == "/api/apps":
                 ok, out = shell("pm list packages -3")
                 return self.send(200, {"ok": ok, "apps": sorted(l[8:] for l in out.splitlines() if l.startswith("package:"))})
+            elif p == "/api/check":
+                return self.send(200, {"ok": True, "alive": check_many(d.get("urls", []))})
             else:
                 return self.send(404, {"error": "not found"})
             self.send(200 if ok else 500, {"ok": ok, "out": out})
         except Exception as e:
             self.send(500, {"ok": False, "error": str(e)})
 
+VERSION = version()
+
 if __name__ == "__main__":
     try:
         _ok, _msg, _rs = update()
         print("mise à jour:", _msg)
-        if _rs: restart_soon()
+        if _rs:
+            restart_soon()
     except Exception as e:
         print("mise à jour impossible:", e)
-    print("mode:", MODE, "| connexion:", connect())
+    VERSION = version()
+    print("mode:", MODE, "| connexion:", connect(), "| version:", VERSION, "| PIN:", "oui" if PIN else "non")
     print(f"Ouvre http://<ip-de-la-box>:{PORT} sur ton iPhone")
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
