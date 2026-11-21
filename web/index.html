@@ -229,10 +229,11 @@ nav button.on svg{stroke:var(--acc)}
   </div>
   <div class="meta"><span id="count"></span><button class="link" id="check" style="padding:.2rem">Vérifier celles qui marchent</button></div>
   <div id="list"></div>
-  <details>
-    <summary>Lecteur vidéo</summary>
-    <select id="pkg"><option value="">Choix automatique</option></select>
-    <p class="hint" style="margin-top:.6rem">C'est l'appli de la box qui lit la chaîne. Kodi est conseillé s'il est installé.</p>
+  <details id="pl">
+    <summary id="pl-sum">Lecteur : choix automatique</summary>
+    <div class="chips" id="players"></div>
+    <input id="pkg" placeholder="Ou écris le nom du lecteur, ex. org.videolan.vlc" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <p class="hint" style="margin-top:.6rem">C'est l'appli de la box qui lit la chaîne. Choisis dans la liste ou écris son nom. Vide = la box te demande à chaque fois.</p>
   </details>
 </section>
 
@@ -531,15 +532,21 @@ const NAMES={"org.xbmc.kodi":"Kodi","com.netflix.mediaclient":"Netflix","com.goo
 const MAIN=["org.xbmc.kodi","com.netflix.mediaclient","com.google.android.youtube.tv","com.amazon.avod.thirdpartyclient","com.nst.iptvsmarterstvbox","com.iptv.neox","com.oxyIPTV","org.videolan.vlc","com.mxtech.videoplayer.ad"];
 let apps=null;
 async function getApps(){if(apps)return apps;try{const r=await api("apps",{});apps=r.apps||[]}catch(e){apps=[]}return apps}
-async function loadPlayers(){
-  const sel=$("#pkg"),have=new Set(await getApps()),found=PLAYERS.filter(([id])=>have.has(id)),saved=store.get("pkg",null);
-  sel.innerHTML="";
-  found.forEach(([id,n])=>sel.append(new Option(n,id)));
-  sel.append(new Option("Choix automatique",""));
-  const vals=[...sel.options].map(o=>o.value);
-  sel.value=(saved!==null&&vals.includes(saved))?saved:(found.length?found[0][0]:"");
+function setPlayer(v){
+  v=(v||"").trim();$("#pkg").value=v;store.set("pkg",v);
+  const known=PLAYERS.find(x=>x[0]===v);
+  $("#pl-sum").textContent="Lecteur : "+(v?(known?known[1]:v):"choix automatique");
+  $$("#players .chip").forEach(c=>c.classList.toggle("on",c.dataset.v===v));
 }
-$("#pkg").onchange=()=>store.set("pkg",$("#pkg").value);
+async function loadPlayers(){
+  const have=new Set(await getApps()),found=PLAYERS.filter(([id])=>have.has(id));
+  const box=$("#players");box.innerHTML="";
+  const add=(v,n)=>{const c=document.createElement("button");c.className="chip";c.dataset.v=v;c.textContent=n;c.onclick=()=>setPlayer(v);box.append(c)};
+  found.forEach(([id,n])=>add(id,n));add("","Choix automatique");
+  const saved=store.get("pkg",null);
+  setPlayer(saved!==null?saved:(found.length?found[0][0]:""));
+}
+$("#pkg").addEventListener("input",()=>setPlayer($("#pkg").value));
 async function loadApps(){
   const list=await getApps();
   const main=MAIN.filter(p=>list.includes(p));
