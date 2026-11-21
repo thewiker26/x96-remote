@@ -70,7 +70,7 @@ input{flex:1}
     <select id="country"><option value="fr">France</option><option value="il">Israël</option><option value="be">Belgique</option><option value="ch">Suisse</option><option value="ca">Canada</option><option value="ma">Maroc</option><option value="dz">Algérie</option><option value="tn">Tunisie</option><option value="eg">Égypte</option><option value="sa">Arabie saoudite</option><option value="ae">Émirats arabes unis</option><option value="tr">Turquie</option><option value="ru">Russie</option><option value="ua">Ukraine</option><option value="am">Arménie</option><option value="us">États-Unis</option><option value="gb">Royaume-Uni</option><option value="es">Espagne</option><option value="it">Italie</option><option value="de">Allemagne</option><option value="pt">Portugal</option><option value="nl">Pays-Bas</option><option value="pl">Pologne</option><option value="ro">Roumanie</option><option value="gr">Grèce</option><option value="br">Brésil</option><option value="in">Inde</option></select>
     <input id="q" type="search" placeholder="Rechercher">
   </div>
-  <div class="bar"><input id="pkg" placeholder="Lecteur (ex. org.videolan.vlc), facultatif"></div>
+  <div class="bar"><select id="pkg" style="flex:1"><option value="">Lecteur : choix automatique</option></select></div>
   <div id="list"></div>
 </section>
 
@@ -112,6 +112,7 @@ async function status(){
   }catch(e){$("#st").textContent="relais injoignable"}
 }
 status();setInterval(status,8000);
+setTimeout(loadPlayers,400);
 
 let timer;
 async function loadCh(){
@@ -135,9 +136,23 @@ try{const c=localStorage.getItem("country");if(c)$("#country").value=c}catch(e){
 $("#mode").onchange=loadCh;
 $("#country").onchange=()=>{try{localStorage.setItem("country",$("#country").value)}catch(e){}loadCh()};
 $("#q").oninput=()=>{clearTimeout(timer);timer=setTimeout(loadCh,350)};
-$("#pkg").value=localStorage.getItem("pkg")||"";$("#pkg").onchange=()=>localStorage.setItem("pkg",$("#pkg").value.trim());
+$("#pkg").onchange=()=>{try{localStorage.setItem("pkg",$("#pkg").value)}catch(e){}};
 
 const NAMES={"com.amazon.avod.thirdpartyclient":"Prime Video","com.google.android.youtube.tv":"YouTube","com.netflix.mediaclient":"Netflix","org.xbmc.kodi":"Kodi","com.nst.iptvsmarterstvbox":"IPTV Smarters","com.iptv.neox":"Neox IPTV","com.oxyIPTV":"Oxy IPTV","com.termux":"Termux (relais, ne pas fermer)","org.fdroid.fdroid":"F-Droid","com.ionitech.airscreen":"AirScreen","com.cetusplay.remoteservice":"CetusPlay (service)"};
+const PLAYERS=[["org.xbmc.kodi","Kodi"],["org.videolan.vlc","VLC"],["com.mxtech.videoplayer.ad","MX Player"],["com.mxtech.videoplayer.pro","MX Player Pro"],["com.brouken.player","Just Player"]];
+async function loadPlayers(){
+  const sel=$("#pkg");
+  let saved=null;try{saved=localStorage.getItem("pkg")}catch(e){}
+  try{
+    const r=await post("apps");const have=new Set(r.apps||[]);
+    const found=PLAYERS.filter(([id])=>have.has(id));
+    sel.innerHTML="";
+    found.forEach(([id,n])=>{const o=document.createElement("option");o.value=id;o.textContent="Lecteur : "+n;sel.append(o)});
+    const a=document.createElement("option");a.value="";a.textContent="Lecteur : choix automatique";sel.append(a);
+    const values=[...sel.options].map(o=>o.value);
+    sel.value=(saved!==null&&values.includes(saved))?saved:(found.length?found[0][0]:"");
+  }catch(e){}
+}
 async function loadApps(){
   const L=$("#applist");L.innerHTML='<div class="mut">Chargement…</div>';
   const r=await post("apps");L.innerHTML="";
