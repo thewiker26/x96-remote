@@ -66,6 +66,7 @@ input{flex:1}
 
 <section id="chan" class="tab">
   <div class="bar">
+    <select id="mode"><option value="">Pays</option><option value="foot">Foot</option><option value="sport">Sport</option></select>
     <select id="country"><option value="fr">France</option><option value="il">Israël</option><option value="be">Belgique</option><option value="ch">Suisse</option><option value="ca">Canada</option><option value="ma">Maroc</option><option value="dz">Algérie</option><option value="tn">Tunisie</option><option value="eg">Égypte</option><option value="sa">Arabie saoudite</option><option value="ae">Émirats arabes unis</option><option value="tr">Turquie</option><option value="ru">Russie</option><option value="ua">Ukraine</option><option value="am">Arménie</option><option value="us">États-Unis</option><option value="gb">Royaume-Uni</option><option value="es">Espagne</option><option value="it">Italie</option><option value="de">Allemagne</option><option value="pt">Portugal</option><option value="nl">Pays-Bas</option><option value="pl">Pologne</option><option value="ro">Roumanie</option><option value="gr">Grèce</option><option value="br">Brésil</option><option value="in">Inde</option></select>
     <input id="q" type="search" placeholder="Rechercher">
   </div>
@@ -75,6 +76,7 @@ input{flex:1}
 
 <section id="apps" class="tab">
   <div class="row r3"><button class="b" data-l="settings">Réglages</button><button class="b" data-l="wifi">Wi-Fi</button><button class="b" id="reload">Actualiser</button></div>
+  <div class="row"><button class="b" id="upd">Mettre à jour cette appli</button></div>
   <div id="applist"></div>
 </section>
 <div id="toast"></div>
@@ -94,6 +96,7 @@ $$("[data-k]").forEach(b=>{
 });
 $("#send").onclick=async()=>{const t=$("#txt").value;if(!t)return;const r=await post("text",{text:t});toast(r.ok?"Envoyé":"Échec");if(r.ok)$("#txt").value=""};
 $$("[data-l]").forEach(b=>b.onclick=()=>post("launch",{package:b.dataset.l}));
+$("#upd").onclick=async()=>{toast("Mise à jour…");try{const r=await post("update");toast(r.ok?r.out:"Échec : "+(r.out||"").slice(0,60));if(r.ok&&r.out==="Mis à jour")setTimeout(()=>location.reload(),2500)}catch(e){toast("Relais injoignable")}};
 
 $$("nav button").forEach(b=>b.onclick=()=>{
   $$("nav button").forEach(x=>x.classList.toggle("on",x===b));
@@ -114,7 +117,7 @@ let timer;
 async function loadCh(){
   const L=$("#list");L.innerHTML='<div class="mut">Chargement…</div>';
   try{
-    const r=await fetch("/api/channels?country="+$("#country").value+"&q="+encodeURIComponent($("#q").value)+"&limit=250");
+    const r=await fetch("/api/channels?mode="+$("#mode").value+"&country="+$("#country").value+"&q="+encodeURIComponent($("#q").value)+"&limit=250");
     const items=await r.json();if(!r.ok)throw 0;
     L.innerHTML="";
     if(!items.length)L.innerHTML='<div class="mut">Aucune chaîne.</div>';
@@ -123,20 +126,22 @@ async function loadCh(){
       const i=document.createElement("img");i.loading="lazy";if(c.logo)i.src=c.logo;i.onerror=()=>i.remove();
       const s=document.createElement("span");s.textContent=c.name;
       d.append(i,s);
-      d.onclick=async()=>{buzz();toast("Lancement : "+c.name);const r=await post("open",{url:c.url,package:$("#pkg").value.trim()});if(!r.ok)toast("Échec du lancement")};
+      d.onclick=async()=>{buzz();toast("Lancement : "+c.name);const r=await post("open",{url:c.url,package:$("#pkg").value.trim()});if(!r.ok)toast("Échec : "+(r.out||r.error||"inconnu").slice(0,80))};
       L.append(d);
     });
   }catch(e){L.innerHTML='<div class="mut">Liste indisponible. La box a-t-elle accès à Internet ?</div>'}
 }
 try{const c=localStorage.getItem("country");if(c)$("#country").value=c}catch(e){}
+$("#mode").onchange=loadCh;
 $("#country").onchange=()=>{try{localStorage.setItem("country",$("#country").value)}catch(e){}loadCh()};
 $("#q").oninput=()=>{clearTimeout(timer);timer=setTimeout(loadCh,350)};
 $("#pkg").value=localStorage.getItem("pkg")||"";$("#pkg").onchange=()=>localStorage.setItem("pkg",$("#pkg").value.trim());
 
+const NAMES={"com.amazon.avod.thirdpartyclient":"Prime Video","com.google.android.youtube.tv":"YouTube","com.netflix.mediaclient":"Netflix","org.xbmc.kodi":"Kodi","com.nst.iptvsmarterstvbox":"IPTV Smarters","com.iptv.neox":"Neox IPTV","com.oxyIPTV":"Oxy IPTV","com.termux":"Termux (relais, ne pas fermer)","org.fdroid.fdroid":"F-Droid","com.ionitech.airscreen":"AirScreen","com.cetusplay.remoteservice":"CetusPlay (service)"};
 async function loadApps(){
   const L=$("#applist");L.innerHTML='<div class="mut">Chargement…</div>';
   const r=await post("apps");L.innerHTML="";
-  (r.apps||[]).forEach(p=>{const d=document.createElement("div");d.className="ch";d.innerHTML="<span></span>";d.firstChild.textContent=p;d.onclick=()=>{post("launch",{package:p});toast("Lancement")};L.append(d)});
+  (r.apps||[]).forEach(p=>{const d=document.createElement("div");d.className="ch";d.innerHTML="<span></span>";d.firstChild.textContent=NAMES[p]||p;d.onclick=()=>{post("launch",{package:p});toast("Lancement")};L.append(d)});
   if(!(r.apps||[]).length)L.innerHTML='<div class="mut">Aucune appli trouvée.</div>';
 }
 $("#reload").onclick=loadApps;

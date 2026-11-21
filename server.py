@@ -78,6 +78,29 @@ def shell(cmd):
     except Exception as e:
         return False, str(e)
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _git(*a):
+    p = subprocess.run(["git", "-C", HERE, *a], capture_output=True, text=True, timeout=90)
+    return p.returncode == 0, (p.stdout + p.stderr).strip()
+
+def update():
+    """git pull ; relance le relais si server.py a changé. Les fichiers web sont relus à chaque requête."""
+    ok, old = _git("rev-parse", "HEAD")
+    ok2, out = _git("pull", "--ff-only")
+    if not ok2:
+        return False, out, False
+    _, new = _git("rev-parse", "HEAD")
+    restart = False
+    if old != new:
+        _, files = _git("diff", "--name-only", old, new)
+        restart = "server.py" in files.split()
+    return True, ("Mis à jour" if old != new else "Déjà à jour"), restart
+
+def restart_soon():
+    import threading, sys
+    threading.Timer(1.0, lambda: os.execv(sys.executable, [sys.executable] + sys.argv)).start()
+
 _cache = {}
 def fetch(url, ttl=3600):
     t = _cache.get(url)
@@ -102,16 +125,41 @@ def parse_m3u(text):
             meta = None
     return out
 
-def channels(country, category, q, limit):
-    if category:
-        src = f"categories/{category}.m3u"
+FOOT = re.compile(r"foot|soccer|f[uú]tbol|calcio|ligue|liga|premier|champions|uefa|fifa|bein|dazn|bundesliga|sport ?5|sport ?1|one sport|eleven|sky sport|canal\+? ?sport|rmc|eurosport|arena|supersport|\bsport", re.I)
+
+def channels(country, category, q, limit, mode=""):
+    if mode in ("foot", "sport"):
+        items = parse_m3u(fetch(IPTV + "categories/sports.m3u"))
+        if country:
+            try:
+                items += parse_m3u(fetch(IPTV + f"countries/{country}.m3u"))
+            except Exception:
+                pass
+        if mode == "foot":
+            items = [c for c in items if FOOT.search(c["name"])]
+        seen, out = set(), []
+        for c in items:
+            if c["url"] not in seen:
+                seen.add(c["url"]); out.append(c)
+        items = out
     else:
-        src = f"countries/{country}.m3u"
-    items = parse_m3u(fetch(IPTV + src))
+        src = f"categories/{category}.m3u" if category else f"countries/{country}.m3u"
+        items = parse_m3u(fetch(IPTV + src))
     q = q.lower()
     if q:
         items = [c for c in items if q in c["name"].lower()]
     return items[:limit]
+
+def launch_app(pkg):
+    for cat in ("android.intent.category.LAUNCHER", "android.intent.category.LEANBACK_LAUNCHER"):
+        ok, out = shell(f"monkey -p {pkg} -c {cat} 1")
+        if ok and "No activities found" not in out and "monkey aborted" not in out:
+            return True, out
+    ok, out = shell(f"cmd package resolve-activity --brief -c android.intent.category.LAUNCHER {pkg}")
+    comp = out.strip().splitlines()[-1].strip() if ok and out.strip() else ""
+    if "/" in comp:
+        return shell(f"am start -n {comp}")
+    return False, "Cette appli n'a pas d'écran à lancer"
 
 def open_stream(url, package=""):
     if not re.match(r"^https?://", url):
@@ -141,7 +189,7 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/status":
                 return self.send(200, {"connected": is_connected(), "target": TARGET, "mode": MODE})
             if u.path == "/api/channels":
-                items = channels(q.get("country", "fr"), q.get("category", ""), q.get("q", ""), int(q.get("limit", "300")))
+                items = channels(q.get("country", "fr"), q.get("category", ""), q.get("q", ""), int(q.get("limit", "300")), q.get("mode", ""))
                 return self.send(200, items)
         except Exception as e:
             return self.send(502, {"ok": False, "error": str(e)})
@@ -160,6 +208,10 @@ class H(BaseHTTPRequestHandler):
             p = self.path
             if p == "/api/connect":
                 ok, out = connect()
+            elif p == "/api/update":
+                ok, out, rs = update()
+                if rs: restart_soon()
+                return self.send(200 if ok else 500, {"ok": ok, "out": out, "restart": rs})
             elif p == "/api/key":
                 code = KEYS.get(d.get("key"))
                 if code is None: return self.send(400, {"ok": False, "error": "touche inconnue"})
@@ -174,7 +226,7 @@ class H(BaseHTTPRequestHandler):
                 pkg = str(d.get("package", ""))
                 if pkg in APPS: ok, out = shell(APPS[pkg])
                 elif re.match(r"^[A-Za-z0-9_.]+$", pkg):
-                    ok, out = shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
+                    ok, out = launch_app(pkg)
                 else: ok, out = False, "package invalide"
             elif p == "/api/apps":
                 ok, out = shell("pm list packages -3")
@@ -186,6 +238,12 @@ class H(BaseHTTPRequestHandler):
             self.send(500, {"ok": False, "error": str(e)})
 
 if __name__ == "__main__":
+    try:
+        _ok, _msg, _rs = update()
+        print("mise à jour:", _msg)
+        if _rs: restart_soon()
+    except Exception as e:
+        print("mise à jour impossible:", e)
     print("mode:", MODE, "| connexion:", connect())
     print(f"Ouvre http://<ip-de-la-box>:{PORT} sur ton iPhone")
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
