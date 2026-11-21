@@ -17,23 +17,66 @@ KEYS = {"up": 19, "down": 20, "left": 21, "right": 22, "ok": 23, "back": 4, "hom
 APPS = {"settings": "am start -a android.settings.SETTINGS",
         "wifi": "am start -a android.settings.WIFI_SETTINGS"}
 
-def adb(*args, timeout=10):
-    p = subprocess.run([ADB, "-s", TARGET, *args], capture_output=True, text=True, timeout=timeout)
-    return p.returncode == 0, (p.stdout + p.stderr).strip()
+def _bin_ok():
+    try:
+        return subprocess.run([ADB, "version"], capture_output=True, timeout=10).returncode == 0
+    except Exception:
+        return False
+
+# Mode "bin" : programme adb. Mode "py" : ADB en Python pur (paquet adb-shell), utile si adb ne démarre pas.
+MODE = os.environ.get("ADB_MODE") or ("bin" if _bin_ok() else "py")
+_dev = None
+
+def _py_connect():
+    global _dev
+    from adb_shell.adb_device import AdbDeviceTcp
+    from adb_shell.auth.keygen import keygen
+    from adb_shell.auth.sign_pythonrsa import PythonRSASigner
+    host, port = TARGET.rsplit(":", 1)
+    key = os.path.expanduser("~/.x96_adbkey")
+    if not os.path.exists(key):
+        keygen(key)
+    signer = PythonRSASigner(open(key + ".pub").read(), open(key).read())
+    d = AdbDeviceTcp(host, int(port), default_transport_timeout_s=9.0)
+    d.connect(rsa_keys=[signer], auth_timeout_s=30)
+    _dev = d
 
 def connect():
+    global _dev
     try:
+        if MODE == "py":
+            _py_connect()
+            return True, "connected (py)"
         p = subprocess.run([ADB, "connect", TARGET], capture_output=True, text=True, timeout=10)
         return "connected" in p.stdout.lower(), p.stdout.strip() or p.stderr.strip()
     except Exception as e:
+        _dev = None
         return False, str(e)
 
+def is_connected():
+    if MODE == "py":
+        return _dev is not None and _dev.available
+    p = subprocess.run([ADB, "-s", TARGET, "get-state"], capture_output=True, text=True, timeout=10)
+    return p.returncode == 0 and "device" in p.stdout
+
+def _run(cmd):
+    if MODE == "py":
+        if _dev is None or not _dev.available:
+            ok, out = connect()
+            if not ok: return False, out
+        return True, str(_dev.shell(cmd)).strip()
+    p = subprocess.run([ADB, "-s", TARGET, "shell", cmd], capture_output=True, text=True, timeout=10)
+    return p.returncode == 0, (p.stdout + p.stderr).strip()
+
 def shell(cmd):
-    ok, out = adb("shell", cmd)
-    if not ok and ("offline" in out or "not found" in out or "no devices" in out):
-        connect()
-        ok, out = adb("shell", cmd)
-    return ok, out
+    try:
+        ok, out = _run(cmd)
+        if not ok and MODE == "bin" and ("offline" in out or "not found" in out or "no devices" in out):
+            connect()
+            ok, out = _run(cmd)
+        return ok, out
+    except Exception as e:
+        return False, str(e)
 
 _cache = {}
 def fetch(url, ttl=3600):
@@ -96,8 +139,7 @@ class H(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
         try:
             if u.path == "/api/status":
-                ok, out = adb("get-state")
-                return self.send(200, {"connected": ok and "device" in out, "target": TARGET, "info": out})
+                return self.send(200, {"connected": is_connected(), "target": TARGET, "mode": MODE})
             if u.path == "/api/channels":
                 items = channels(q.get("country", "fr"), q.get("category", ""), q.get("q", ""), int(q.get("limit", "300")))
                 return self.send(200, items)
@@ -144,6 +186,6 @@ class H(BaseHTTPRequestHandler):
             self.send(500, {"ok": False, "error": str(e)})
 
 if __name__ == "__main__":
-    print("adb connect:", connect())
+    print("mode:", MODE, "| connexion:", connect())
     print(f"Ouvre http://<ip-de-la-box>:{PORT} sur ton iPhone")
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

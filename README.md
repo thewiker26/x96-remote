@@ -26,3 +26,7 @@ Même Wi-Fi que la box obligatoire.
 
 ## Test sans box
 `ADB=tests/fakeadb.sh PORT=8099 python3 server.py`
+
+## Si `adb` ne démarre pas dans Termux
+Le relais bascule seul en ADB Python pur (mode `py`). Installer une fois :
+`pip install adb-shell`   (ADB_MODE=py pour le forcer)
