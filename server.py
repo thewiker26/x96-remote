@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Relais X96 Remote : sert la page web et traduit les boutons en commandes ADB.
+Aucune dépendance Python. Variables : ADB_TARGET (def. localhost:5555), PORT (def. 8080), ADB (def. adb)."""
+import json, os, re, shlex, subprocess, time, urllib.request, urllib.parse
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+ADB = os.environ.get("ADB", "adb")
+TARGET = os.environ.get("ADB_TARGET", "localhost:5555")
+PORT = int(os.environ.get("PORT", "8080"))
+WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+IPTV = "https://iptv-org.github.io/iptv/"
+
+KEYS = {"up": 19, "down": 20, "left": 21, "right": 22, "ok": 23, "back": 4, "home": 3,
+        "menu": 82, "power": 26, "volup": 24, "voldown": 25, "mute": 164, "play": 85,
+        "ff": 90, "rw": 89, "chup": 166, "chdown": 167, "info": 165, "del": 67,
+        **{str(i): 7 + i for i in range(10)}}
+APPS = {"settings": "am start -a android.settings.SETTINGS",
+        "wifi": "am start -a android.settings.WIFI_SETTINGS"}
+
+def adb(*args, timeout=10):
+    p = subprocess.run([ADB, "-s", TARGET, *args], capture_output=True, text=True, timeout=timeout)
+    return p.returncode == 0, (p.stdout + p.stderr).strip()
+
+def connect():
+    try:
+        p = subprocess.run([ADB, "connect", TARGET], capture_output=True, text=True, timeout=10)
+        return "connected" in p.stdout.lower(), p.stdout.strip() or p.stderr.strip()
+    except Exception as e:
+        return False, str(e)
+
+def shell(cmd):
+    ok, out = adb("shell", cmd)
+    if not ok and ("offline" in out or "not found" in out or "no devices" in out):
+        connect()
+        ok, out = adb("shell", cmd)
+    return ok, out
+
+_cache = {}
+def fetch(url, ttl=3600):
+    t = _cache.get(url)
+    if t and time.time() - t[0] < ttl:
+        return t[1]
+    with urllib.request.urlopen(url, timeout=25) as r:
+        data = r.read().decode("utf-8", "replace")
+    _cache[url] = (time.time(), data)
+    return data
+
+def parse_m3u(text):
+    out, meta = [], None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXTINF"):
+            name = line.rsplit(",", 1)[-1].strip()
+            g = lambda k: (re.search(k + r'="([^"]*)"', line) or [None, ""])[1]
+            meta = {"name": name, "logo": g("tvg-logo"), "group": g("group-title")}
+        elif line and not line.startswith("#") and meta:
+            meta["url"] = line
+            out.append(meta)
+            meta = None
+    return out
+
+def channels(country, category, q, limit):
+    if category:
+        src = f"categories/{category}.m3u"
+    else:
+        src = f"countries/{country}.m3u"
+    items = parse_m3u(fetch(IPTV + src))
+    q = q.lower()
+    if q:
+        items = [c for c in items if q in c["name"].lower()]
+    return items[:limit]
+
+def open_stream(url, package=""):
+    if not re.match(r"^https?://", url):
+        return False, "URL invalide"
+    cmd = f"am start -a android.intent.action.VIEW -d {shlex.quote(url)} -t 'video/*'"
+    if package:
+        if not re.match(r"^[A-Za-z0-9_.]+$", package):
+            return False, "package invalide"
+        cmd += f" -p {package}"
+    return shell(cmd)
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def send(self, code, body, ctype="application/json"):
+        b = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        try:
+            if u.path == "/api/status":
+                ok, out = adb("get-state")
+                return self.send(200, {"connected": ok and "device" in out, "target": TARGET, "info": out})
+            if u.path == "/api/channels":
+                items = channels(q.get("country", "fr"), q.get("category", ""), q.get("q", ""), int(q.get("limit", "300")))
+                return self.send(200, items)
+        except Exception as e:
+            return self.send(502, {"ok": False, "error": str(e)})
+        name = "index.html" if u.path == "/" else u.path.lstrip("/")
+        path = os.path.realpath(os.path.join(WEB, name))
+        if not path.startswith(os.path.realpath(WEB) + os.sep) or not os.path.isfile(path):
+            return self.send(404, {"error": "not found"})
+        ct = {"html": "text/html; charset=utf-8", "json": "application/json", "png": "image/png",
+              "js": "text/javascript", "webmanifest": "application/manifest+json"}.get(path.rsplit(".", 1)[-1], "application/octet-stream")
+        self.send(200, open(path, "rb").read(), ct)
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            d = json.loads(self.rfile.read(n) or b"{}")
+            p = self.path
+            if p == "/api/connect":
+                ok, out = connect()
+            elif p == "/api/key":
+                code = KEYS.get(d.get("key"))
+                if code is None: return self.send(400, {"ok": False, "error": "touche inconnue"})
+                ok, out = shell(f"input keyevent {code}")
+            elif p == "/api/text":
+                t = str(d.get("text", ""))
+                t = re.sub(r"[^A-Za-z0-9@._\-+ ]", "", t).replace(" ", "%s")
+                ok, out = shell(f"input text {shlex.quote(t)}")
+            elif p == "/api/open":
+                ok, out = open_stream(str(d.get("url", "")), str(d.get("package", "")))
+            elif p == "/api/launch":
+                pkg = str(d.get("package", ""))
+                if pkg in APPS: ok, out = shell(APPS[pkg])
+                elif re.match(r"^[A-Za-z0-9_.]+$", pkg):
+                    ok, out = shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
+                else: ok, out = False, "package invalide"
+            elif p == "/api/apps":
+                ok, out = shell("pm list packages -3")
+                return self.send(200, {"ok": ok, "apps": sorted(l[8:] for l in out.splitlines() if l.startswith("package:"))})
+            else:
+                return self.send(404, {"error": "not found"})
+            self.send(200 if ok else 500, {"ok": ok, "out": out})
+        except Exception as e:
+            self.send(500, {"ok": False, "error": str(e)})
+
+if __name__ == "__main__":
+    print("adb connect:", connect())
+    print(f"Ouvre http://<ip-de-la-box>:{PORT} sur ton iPhone")
+    ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

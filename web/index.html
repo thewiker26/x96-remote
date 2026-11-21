@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="X96">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111111">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>X96 Remote</title>
+<style>
+:root{--bg:#111;--panel:#1b1b1b;--btn:#262626;--btn2:#303030;--tx:#f2f2f2;--mut:#8a8a8a;--acc:#e8e2d0}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
+body{padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom);max-width:460px;margin:0 auto;display:flex;flex-direction:column}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 2px 10px}
+h1{font-size:15px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin:0}
+#st{font-size:12px;color:var(--mut)}
+nav{display:flex;gap:6px;background:var(--panel);padding:4px;border-radius:12px;margin-bottom:14px}
+nav button{flex:1;padding:9px;border:0;border-radius:9px;background:none;color:var(--mut);font:inherit;font-size:14px}
+nav button.on{background:var(--btn2);color:var(--tx)}
+button{font:inherit;color:var(--tx)}
+.b{background:var(--btn);border:0;border-radius:14px;height:52px;font-size:15px;touch-action:manipulation}
+.b:active{background:var(--btn2);transform:scale(.97)}
+.row{display:grid;gap:10px;margin-bottom:10px}
+.r3{grid-template-columns:repeat(3,1fr)}.r4{grid-template-columns:repeat(4,1fr)}
+.dpad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:6px 0 14px}
+.dpad .b{height:68px;font-size:20px}
+.ok{background:var(--acc);color:#111;font-weight:600}.ok:active{background:#d8d2c0}
+.pw{color:#e07a6a}
+.tab{display:none;flex:1;min-height:0}.tab.on{display:block}
+#chan.on{display:flex;flex-direction:column}
+.bar{display:flex;gap:8px;margin-bottom:10px}
+input,select{background:var(--panel);border:1px solid #2c2c2c;color:var(--tx);border-radius:10px;padding:11px;font:inherit;font-size:16px;-webkit-user-select:text;user-select:text;min-width:0}
+input{flex:1}
+#list{overflow:auto;flex:1;-webkit-overflow-scrolling:touch}
+.ch{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid #222}
+.ch img{width:38px;height:38px;object-fit:contain;background:#222;border-radius:8px}
+.ch span{flex:1;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch:active{background:var(--panel)}
+.mut{color:var(--mut);font-size:13px;padding:14px 2px}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#333;padding:9px 16px;border-radius:20px;font-size:13px;opacity:0;transition:.2s;pointer-events:none}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+<header><h1>X96 Remote</h1><span id="st">connexion…</span></header>
+<nav><button data-t="rem" class="on">Télécommande</button><button data-t="chan">Chaînes</button><button data-t="apps">Applis</button></nav>
+
+<section id="rem" class="tab on">
+  <div class="row r3"><button class="b pw" data-k="power">Marche</button><button class="b" data-k="home">Accueil</button><button class="b" data-k="back">Retour</button></div>
+  <div class="dpad">
+    <span></span><button class="b" data-k="up" data-rep>▲</button><span></span>
+    <button class="b" data-k="left" data-rep>◀</button><button class="b ok" data-k="ok">OK</button><button class="b" data-k="right" data-rep>▶</button>
+    <span></span><button class="b" data-k="down" data-rep>▼</button><span></span>
+  </div>
+  <div class="row r4"><button class="b" data-k="menu">Menu</button><button class="b" data-k="rw">⏪</button><button class="b" data-k="play">⏯</button><button class="b" data-k="ff">⏩</button></div>
+  <div class="row r4"><button class="b" data-k="voldown" data-rep>Vol −</button><button class="b" data-k="mute">Muet</button><button class="b" data-k="volup" data-rep>Vol +</button><button class="b" data-k="del">⌫</button></div>
+  <div class="row r3"><button class="b" data-k="1">1</button><button class="b" data-k="2">2</button><button class="b" data-k="3">3</button>
+  <button class="b" data-k="4">4</button><button class="b" data-k="5">5</button><button class="b" data-k="6">6</button>
+  <button class="b" data-k="7">7</button><button class="b" data-k="8">8</button><button class="b" data-k="9">9</button></div>
+  <div class="bar"><input id="txt" placeholder="Texte à envoyer à la box" autocapitalize="off" autocorrect="off"><button class="b" style="height:44px;padding:0 16px" id="send">Envoyer</button></div>
+</section>
+
+<section id="chan" class="tab">
+  <div class="bar">
+    <select id="country"><option value="fr">France</option><option value="be">Belgique</option><option value="ch">Suisse</option><option value="ca">Canada</option><option value="ma">Maroc</option><option value="dz">Algérie</option><option value="tn">Tunisie</option><option value="us">États-Unis</option><option value="gb">Royaume-Uni</option><option value="es">Espagne</option><option value="it">Italie</option><option value="de">Allemagne</option><option value="pt">Portugal</option></select>
+    <input id="q" type="search" placeholder="Rechercher">
+  </div>
+  <div class="bar"><input id="pkg" placeholder="Lecteur (ex. org.videolan.vlc), facultatif"></div>
+  <div id="list"></div>
+</section>
+
+<section id="apps" class="tab">
+  <div class="row r3"><button class="b" data-l="settings">Réglages</button><button class="b" data-l="wifi">Wi-Fi</button><button class="b" id="reload">Actualiser</button></div>
+  <div id="applist"></div>
+</section>
+<div id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
+const toast=m=>{const t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove("on"),1600)};
+const post=(p,d)=>fetch("/api/"+p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d||{})}).then(r=>r.json());
+const buzz=()=>navigator.vibrate&&navigator.vibrate(8);
+
+async function key(k){buzz();const r=await post("key",{key:k}).catch(()=>({ok:false}));if(!r.ok)toast("Box injoignable")}
+$$("[data-k]").forEach(b=>{
+  let h,iv;
+  const stop=()=>{clearTimeout(h);clearInterval(iv)};
+  b.addEventListener("pointerdown",e=>{e.preventDefault();key(b.dataset.k);if(b.hasAttribute("data-rep"))h=setTimeout(()=>iv=setInterval(()=>key(b.dataset.k),160),380)});
+  ["pointerup","pointerleave","pointercancel"].forEach(ev=>b.addEventListener(ev,stop));
+});
+$("#send").onclick=async()=>{const t=$("#txt").value;if(!t)return;const r=await post("text",{text:t});toast(r.ok?"Envoyé":"Échec");if(r.ok)$("#txt").value=""};
+$$("[data-l]").forEach(b=>b.onclick=()=>post("launch",{package:b.dataset.l}));
+
+$$("nav button").forEach(b=>b.onclick=()=>{
+  $$("nav button").forEach(x=>x.classList.toggle("on",x===b));
+  $$(".tab").forEach(x=>x.classList.toggle("on",x.id===b.dataset.t));
+  if(b.dataset.t==="chan"&&!$("#list").children.length)loadCh();
+  if(b.dataset.t==="apps"&&!$("#applist").children.length)loadApps();
+});
+
+async function status(){
+  try{const r=await (await fetch("/api/status")).json();
+    $("#st").textContent=r.connected?"connecté":"non connecté";
+    if(!r.connected)post("connect");
+  }catch(e){$("#st").textContent="relais injoignable"}
+}
+status();setInterval(status,8000);
+
+let timer;
+async function loadCh(){
+  const L=$("#list");L.innerHTML='<div class="mut">Chargement…</div>';
+  try{
+    const r=await fetch("/api/channels?country="+$("#country").value+"&q="+encodeURIComponent($("#q").value)+"&limit=250");
+    const items=await r.json();if(!r.ok)throw 0;
+    L.innerHTML="";
+    if(!items.length)L.innerHTML='<div class="mut">Aucune chaîne.</div>';
+    items.forEach(c=>{
+      const d=document.createElement("div");d.className="ch";
+      const i=document.createElement("img");i.loading="lazy";if(c.logo)i.src=c.logo;i.onerror=()=>i.remove();
+      const s=document.createElement("span");s.textContent=c.name;
+      d.append(i,s);
+      d.onclick=async()=>{buzz();toast("Lancement : "+c.name);const r=await post("open",{url:c.url,package:$("#pkg").value.trim()});if(!r.ok)toast("Échec du lancement")};
+      L.append(d);
+    });
+  }catch(e){L.innerHTML='<div class="mut">Liste indisponible. La box a-t-elle accès à Internet ?</div>'}
+}
+$("#country").onchange=loadCh;
+$("#q").oninput=()=>{clearTimeout(timer);timer=setTimeout(loadCh,350)};
+$("#pkg").value=localStorage.getItem("pkg")||"";$("#pkg").onchange=()=>localStorage.setItem("pkg",$("#pkg").value.trim());
+
+async function loadApps(){
+  const L=$("#applist");L.innerHTML='<div class="mut">Chargement…</div>';
+  const r=await post("apps");L.innerHTML="";
+  (r.apps||[]).forEach(p=>{const d=document.createElement("div");d.className="ch";d.innerHTML="<span></span>";d.firstChild.textContent=p;d.onclick=()=>{post("launch",{package:p});toast("Lancement")};L.append(d)});
+  if(!(r.apps||[]).length)L.innerHTML='<div class="mut">Aucune appli trouvée.</div>';
+}
+$("#reload").onclick=loadApps;
+document.addEventListener("dblclick",e=>e.preventDefault());
+</script>
+</body>
+</html>
