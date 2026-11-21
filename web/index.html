@@ -66,7 +66,7 @@ input{flex:1}
 
 <section id="chan" class="tab">
   <div class="bar">
-    <select id="country"><option value="fr">France</option><option value="be">Belgique</option><option value="ch">Suisse</option><option value="ca">Canada</option><option value="ma">Maroc</option><option value="dz">Algérie</option><option value="tn">Tunisie</option><option value="us">États-Unis</option><option value="gb">Royaume-Uni</option><option value="es">Espagne</option><option value="it">Italie</option><option value="de">Allemagne</option><option value="pt">Portugal</option></select>
+    <select id="country"><option value="fr">France</option><option value="il">Israël</option><option value="be">Belgique</option><option value="ch">Suisse</option><option value="ca">Canada</option><option value="ma">Maroc</option><option value="dz">Algérie</option><option value="tn">Tunisie</option><option value="eg">Égypte</option><option value="sa">Arabie saoudite</option><option value="ae">Émirats arabes unis</option><option value="tr">Turquie</option><option value="ru">Russie</option><option value="ua">Ukraine</option><option value="am">Arménie</option><option value="us">États-Unis</option><option value="gb">Royaume-Uni</option><option value="es">Espagne</option><option value="it">Italie</option><option value="de">Allemagne</option><option value="pt">Portugal</option><option value="nl">Pays-Bas</option><option value="pl">Pologne</option><option value="ro">Roumanie</option><option value="gr">Grèce</option><option value="br">Brésil</option><option value="in">Inde</option></select>
     <input id="q" type="search" placeholder="Rechercher">
   </div>
   <div class="bar"><input id="pkg" placeholder="Lecteur (ex. org.videolan.vlc), facultatif"></div>
@@ -128,7 +128,8 @@ async function loadCh(){
     });
   }catch(e){L.innerHTML='<div class="mut">Liste indisponible. La box a-t-elle accès à Internet ?</div>'}
 }
-$("#country").onchange=loadCh;
+try{const c=localStorage.getItem("country");if(c)$("#country").value=c}catch(e){}
+$("#country").onchange=()=>{try{localStorage.setItem("country",$("#country").value)}catch(e){}loadCh()};
 $("#q").oninput=()=>{clearTimeout(timer);timer=setTimeout(loadCh,350)};
 $("#pkg").value=localStorage.getItem("pkg")||"";$("#pkg").onchange=()=>localStorage.setItem("pkg",$("#pkg").value.trim());
 
