@@ -34,12 +34,11 @@ Le relais fabrique une liste M3U pour **Kodi** (PVR IPTV Simple Client) : `http:
 ## 2. Sur l'iPhone
 Safari > `http://IP-DE-LA-BOX:8080` > Partager > « Sur l'écran d'accueil ». Même Wi-Fi que la box.
 
-## Démarrage automatique (à faire une seule fois)
-1. Installer **Termux:Boot** depuis F-Droid et l'ouvrir une fois.
-2. Dans Termux : `cd x96-remote && git pull && sh install-auto.sh`
-
-Ensuite le relais se lance seul à chaque démarrage de la box, et aussi quand on ouvre Termux (plan B).
-Il se reconnecte seul à l'ADB de la box s'il n'est pas prêt au démarrage.
+## Démarrage automatique
+Dans l'appli : onglet **Applis > Installation > Installer**. Le relais crée les scripts, télécharge
+Termux:Boot depuis F-Droid, l'installe par ADB et l'active. Rien d'autre à faire.
+(Alternative en ligne de commande : `sh install-auto.sh`.)
+Le relais se met aussi à jour tout seul (`git pull`) à chaque démarrage et se reconnecte seul à l'ADB.
 
 ## Mise à jour
 Bouton « Vérifier » dans l'onglet Applis (ou `git pull` dans le dossier).

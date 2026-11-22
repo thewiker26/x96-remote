@@ -272,6 +272,10 @@ nav button.on svg{stroke:var(--acc)}
 
 <!-- ============ APPLIS ============ -->
 <section id="t-apps" class="tab">
+  <details id="setup" style="margin-top:.2rem">
+    <summary id="setup-sum" style="color:var(--tx)">Installation</summary>
+    <div id="setup-rows"></div>
+  </details>
   <div class="cap" style="margin-top:.4rem">Mes applis</div>
   <div class="tiles" id="tiles"></div>
   <details>
@@ -394,7 +398,7 @@ function openTab(t){
   $("main").scrollTop=0;
   store.set("tab",t);
   if(t==="chan"&&!$("#list").children.length)loadCh();
-  if(t==="apps")loadApps();
+  if(t==="apps"){loadApps();loadSetup();}
   if(t==="kb")setTimeout(()=>$("#kb").focus(),50);
 }
 $$("#nav button").forEach(b=>b.onclick=()=>openTab(b.dataset.t));
@@ -578,6 +582,36 @@ async function loadApps(){
     if(!r.ok)toast("Impossible : "+String(r.out||r.error||"").slice(0,70))});
 }
 $$("[data-l]").forEach(b=>b.onclick=async()=>{let r;try{r=await api("launch",{package:b.dataset.l})}catch(e){return}if(!r.ok)toast("Impossible d'ouvrir")});
+
+/* ---------- assistant d'installation ---------- */
+async function installBoot(btn){
+  btn.disabled=true;toast("Installation en cours, patiente une minute…");
+  try{const r=await api("setup/boot",{});toast((r.steps||[]).join(". ")||"Terminé")}
+  catch(e){toast("Impossible pour le moment")}
+  loadSetup();
+}
+let setupAuto=false;
+async function loadSetup(){
+  let r;try{r=await api("setup")}catch(e){return}
+  const rows=[
+    {t:"Box connectée",ok:r.adb,txt:r.adb?"Oui":"Non",btn:r.adb?null:["Reconnecter",()=>reconnect().then(loadSetup)]},
+    {t:"Démarrage automatique",sub:"Le relais se lance seul quand la box s'allume",ok:r.boot_app&&r.boot_script,
+      txt:(r.boot_app&&r.boot_script)?"Actif":"À installer",btn:(r.boot_app&&r.boot_script)?null:["Installer",installBoot]},
+    {t:"Chaînes pour Kodi",sub:"Pour zapper avec la télécommande de la box",ok:r.playlist>0,
+      txt:r.playlist>0?r.playlist+" chaînes prêtes":"En préparation",btn:["Comment faire",()=>openSheet("sh-tv")]},
+    {t:"Kodi",ok:r.kodi,txt:r.kodi?"Installé":"Absent"}
+  ];
+  const todo=rows.filter(x=>!x.ok).length;
+  $("#setup-sum").textContent=todo?"Installation : "+todo+" point"+(todo>1?"s":"")+" à régler":"Installation : tout est en place";
+  const box=$("#setup-rows");box.innerHTML="";
+  rows.forEach(x=>{
+    const d=document.createElement("div");d.className="row";
+    d.innerHTML='<div class="l">'+esc(x.t)+'<small style="color:'+(x.ok?"var(--ok)":"var(--mut)")+'">'+esc(x.txt)+(x.sub?" · "+esc(x.sub):"")+'</small></div>';
+    if(x.btn){const b=document.createElement("button");b.className="sm";b.textContent=x.btn[0];b.onclick=()=>x.btn[1](b);d.append(b)}
+    box.append(d);
+  });
+  if(!setupAuto){setupAuto=true;$("#setup").open=todo>0}
+}
 
 /* ---------- état, réglages ---------- */
 async function status(){

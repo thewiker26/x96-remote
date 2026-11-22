@@ -3,7 +3,7 @@
 Aucune dépendance obligatoire.
 Variables : ADB_TARGET (def. localhost:5555), PORT (def. 8080), ADB (def. adb),
             X96_PIN (code facultatif demandé par la page), ADB_MODE (bin|py)."""
-import json, os, re, shlex, subprocess, sys, threading, time, unicodedata
+import json, os, re, shlex, shutil, subprocess, sys, threading, time, unicodedata
 import urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -269,6 +269,7 @@ def check_many(urls):
 # ---------------------------------------------------------------- Liste de chaînes pour Kodi (sans iPhone)
 
 DEFAULT_COUNTRIES = [c for c in re.split(r"[ ,]+", os.environ.get("X96_COUNTRIES", "fr,il").lower()) if re.match(r"^[a-z]{2}$", c)]
+_last_count = 0
 _dead = {}          # url -> heure à laquelle elle a été vue morte
 _warming = False
 
@@ -335,6 +336,8 @@ def build_playlist(countries, foot=True, only_foot=False, alive=True):
         warm([c["url"] for c in out if c["url"] not in _alive][:600])
         out = [c for c in out if not _is_dead(c["url"])]
     out.sort(key=lambda c: (c["group"] != "Foot", c["group"], c["name"].lower()))
+    global _last_count
+    _last_count = len(out)
     q = lambda s: str(s).replace('"', "'").replace("\n", " ")
     lines = ["#EXTM3U"]
     for c in out:
@@ -354,6 +357,87 @@ def playlist_for(path, q):
     else:
         args = dict(countries=[name], foot=q.get("foot", "0") == "1", only_foot=False)
     return build_playlist(alive=q.get("alive", "1") != "0", **args)
+
+# ---------------------------------------------------------------- Installation assistée (démarrage automatique)
+
+HOME = os.path.expanduser("~")
+BOOT_DIR = os.path.join(HOME, ".termux", "boot")
+BOOT_SCRIPT = os.path.join(BOOT_DIR, "x96-remote.sh")
+BASHRC = os.path.join(HOME, ".bashrc")
+MARK = "x96-remote-auto"
+FDROID = os.environ.get("FDROID_BASE", "https://f-droid.org")
+UA = {"User-Agent": "Mozilla/5.0"}
+
+def has_pkg(pkg):
+    ok, out = shell(f"pm list packages {pkg}")
+    return ok and f"package:{pkg}" in out.split()
+
+def _read(path):
+    try:
+        return open(path, encoding="utf-8").read()
+    except Exception:
+        return ""
+
+def setup_status():
+    conn = is_connected()
+    return {"adb": conn,
+            "boot_app": bool(conn and has_pkg("com.termux.boot")),
+            "boot_script": os.path.isfile(BOOT_SCRIPT) and MARK in _read(BASHRC),
+            "kodi": bool(conn and has_pkg("org.xbmc.kodi")),
+            "playlist": _last_count, "version": VERSION}
+
+def fdroid_apk_url(pkg):
+    req = urllib.request.Request(f"{FDROID}/packages/{pkg}/", headers=UA)
+    html = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace")
+    found = re.findall(r"/repo/%s_(\d+)\.apk" % re.escape(pkg), html)
+    if not found:
+        raise RuntimeError("fichier introuvable sur F-Droid")
+    return f"{FDROID}/repo/{pkg}_{max(map(int, found))}.apk"
+
+def install_from_fdroid(pkg):
+    """Télécharge l'APK depuis F-Droid puis l'installe par ADB (aucun clic nécessaire sur la box)."""
+    if MODE != "bin":
+        return False, "installation automatique indisponible en mode Python"
+    path = os.path.join(HOME, f"{pkg}.apk")
+    try:
+        url = fdroid_apk_url(pkg)
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r, open(path, "wb") as f:
+            shutil.copyfileobj(r, f)
+        p = subprocess.run([ADB, "-s", TARGET, "install", "-r", path], capture_output=True, text=True, timeout=180)
+        out = (p.stdout + p.stderr).strip()
+        return ("Success" in out), ("Installé" if "Success" in out else "Échec de l'installation : " + out[-120:])
+    except Exception as e:
+        return False, "Téléchargement impossible : " + str(e)[:100]
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+def install_boot():
+    steps = []
+    os.makedirs(BOOT_DIR, exist_ok=True)
+    shutil.copyfile(os.path.join(HERE, "termux-boot", "x96-remote.sh"), BOOT_SCRIPT)
+    os.chmod(BOOT_SCRIPT, 0o755)
+    if MARK not in _read(BASHRC):
+        with open(BASHRC, "a", encoding="utf-8") as f:
+            f.write(f'\n# {MARK} : lance le relais à l\'ouverture de Termux (sans effet s\'il tourne déjà)\ncd "{HERE}" && python3 server.py\n')
+    steps.append("Démarrage automatique préparé")
+    if has_pkg("com.termux.boot"):
+        steps.append("Termux:Boot déjà installé")
+        ok = True
+    else:
+        ok, msg = install_from_fdroid("com.termux.boot")
+        steps.append("Termux:Boot : " + msg)
+        if not ok:
+            shell("am start -a android.intent.action.VIEW -d market://details?id=com.termux.boot -p org.fdroid.fdroid")
+            steps.append("F-Droid ouvert sur la TV : appuie sur Installer avec la télécommande")
+    if ok:
+        shell("monkey -p com.termux.boot -c android.intent.category.LAUNCHER 1")
+        time.sleep(3)
+        keys("back")
+        steps.append("Termux:Boot activé")
+    return ok, steps
 
 # ---------------------------------------------------------------- HTTP
 
@@ -385,6 +469,10 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/status":
                 return self.send(200, {"connected": is_connected(), "target": TARGET, "mode": MODE,
                                        "version": VERSION, "pin_required": bool(PIN), "authorized": self.authorized()})
+            if u.path == "/api/setup":
+                if not self.authorized():
+                    return self.send(401, {"ok": False, "error": "pin"})
+                return self.send(200, setup_status())
             if u.path == "/api/channels":
                 if not self.authorized():
                     return self.send(401, {"ok": False, "error": "pin"})
@@ -440,6 +528,9 @@ class H(BaseHTTPRequestHandler):
             elif p == "/api/apps":
                 ok, out = shell("pm list packages -3")
                 return self.send(200, {"ok": ok, "apps": sorted(l[8:] for l in out.splitlines() if l.startswith("package:"))})
+            elif p == "/api/setup/boot":
+                ok, steps = install_boot()
+                return self.send(200, {"ok": ok, "steps": steps})
             elif p == "/api/check":
                 return self.send(200, {"ok": True, "alive": check_many(d.get("urls", []))})
             else:
