@@ -355,7 +355,22 @@ class H(BaseHTTPRequestHandler):
 
 VERSION = version()
 
+def keep_connected():
+    """Se reconnecte seul à la box (utile au démarrage, quand l'ADB met du temps à être prêt)."""
+    while True:
+        try:
+            if not is_connected():
+                connect()
+        except Exception:
+            pass
+        time.sleep(10)
+
 if __name__ == "__main__":
+    try:
+        srv = ThreadingHTTPServer(("0.0.0.0", PORT), H)
+    except OSError:
+        print(f"Le relais tourne déjà sur le port {PORT}. Rien à faire.")
+        sys.exit(0)
     try:
         _ok, _msg, _rs = update()
         print("mise à jour:", _msg)
@@ -366,4 +381,5 @@ if __name__ == "__main__":
     VERSION = version()
     print("mode:", MODE, "| connexion:", connect(), "| version:", VERSION, "| PIN:", "oui" if PIN else "non")
     print(f"Ouvre http://<ip-de-la-box>:{PORT} sur ton iPhone")
-    ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    threading.Thread(target=keep_connected, daemon=True).start()
+    srv.serve_forever()

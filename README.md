@@ -29,14 +29,12 @@ iPhone (Safari) -> relais `server.py` sur la box (Termux) -> ADB -> la box elle-
 ## 2. Sur l'iPhone
 Safari > `http://IP-DE-LA-BOX:8080` > Partager > « Sur l'écran d'accueil ». Même Wi-Fi que la box.
 
-## Démarrage automatique après un redémarrage de la box
-Installer **Termux:Boot** (F-Droid), l'ouvrir une fois, puis dans Termux :
-```sh
-mkdir -p ~/.termux/boot
-cp ~/x96-remote/termux-boot/x96-remote.sh ~/.termux/boot/
-chmod +x ~/.termux/boot/x96-remote.sh
-```
-L'ADB réseau de la box doit rester actif après un redémarrage (selon le modèle, il faut parfois le réactiver).
+## Démarrage automatique (à faire une seule fois)
+1. Installer **Termux:Boot** depuis F-Droid et l'ouvrir une fois.
+2. Dans Termux : `cd x96-remote && git pull && sh install-auto.sh`
+
+Ensuite le relais se lance seul à chaque démarrage de la box, et aussi quand on ouvre Termux (plan B).
+Il se reconnecte seul à l'ADB de la box s'il n'est pas prêt au démarrage.
 
 ## Mise à jour
 Bouton « Vérifier » dans l'onglet Applis (ou `git pull` dans le dossier).
