@@ -13,6 +13,11 @@ iPhone (Safari) -> relais `server.py` sur la box (Termux) -> ADB -> la box elle-
 - Texte plus grand, thème clair/sombre automatique, aide intégrée, mise à jour en un bouton.
 - Code d'accès facultatif : `X96_PIN=1234 python3 server.py`.
 
+## Sans téléphone : chaînes avec la télécommande physique
+Le relais fabrique une liste M3U pour **Kodi** (PVR IPTV Simple Client) : `http://127.0.0.1:8080/mix.m3u`
+(France + Israël + groupe Foot, flux morts retirés). Autres : `/foot.m3u`, `/fr.m3u`, `/il.m3u`,
+`/playlist.m3u?country=fr,il,ma`. Pays par défaut : `X96_COUNTRIES=fr,il`. Mode d'emploi dans l'appli (Applis > Sans téléphone).
+
 ## 1. Sur la box
 1. Paramètres > À propos : 7 appuis sur « Numéro de build ».
 2. Options pour les développeurs : activer « Débogage USB » (et « ADB sur réseau » si présent).

@@ -286,6 +286,8 @@ nav button.on svg{stroke:var(--acc)}
     <button class="tile" data-l="sound"><span class="ic">S</span>Son</button>
     <button class="tile" data-l="bluetooth"><span class="ic">B</span>Bluetooth</button>
   </div>
+  <div class="cap">Sans téléphone</div>
+  <div class="row"><div class="l">Chaînes avec la télécommande de la box<small>Dans Kodi, sans utiliser l'iPhone</small></div><button class="sm" id="tv-open">Comment faire</button></div>
   <div class="cap">Cette appli</div>
   <div class="row"><div class="l">Texte plus grand<small>Pour lire plus facilement</small></div><div class="sw" style="padding:0"><input type="checkbox" id="big"></div></div>
   <div class="row"><div class="l">Mettre à jour<small id="ver">Version</small></div><button class="sm" id="upd">Vérifier</button></div>
@@ -334,10 +336,29 @@ nav button.on svg{stroke:var(--acc)}
     <li>La box doit être allumée et Termux doit être resté ouvert.</li>
     <li>Ton iPhone doit être sur le même Wi-Fi que la box (pas en 4G).</li>
     <li>Applis, puis « Reconnecter la box ».</li>
+    <li>Pour regarder sans téléphone, Applis puis « Chaînes avec la télécommande de la box ».</li>
     <li>Le volume ici règle la box. Pour la TV, utilise sa propre télécommande.</li>
   </ul>
   <p><b>Une chaîne ne démarre pas ?</b> Certaines sont hors service ou limitées à un pays. Essaie la suivante ou lance « Vérifier celles qui marchent ».</p>
   <div class="grid"><button class="b acc" id="help-close">Fermer</button></div>
+</div></div>
+
+<div class="sheet" id="sh-tv"><div class="card">
+  <h2>Regarder avec la télécommande de la box</h2>
+  <p>Kodi peut afficher toutes les chaînes. Tu zappes avec ta télécommande physique, sans l'iPhone. À faire une seule fois :</p>
+  <ol style="padding-left:1.2rem;line-height:1.5;font-size:.95rem">
+    <li>Dans Kodi : <b>Add-ons</b> (Modules), <b>My add-ons</b> (Mes modules), <b>PVR clients</b>, puis <b>PVR IPTV Simple Client</b>, puis <b>Configure</b>. S'il n'y est pas : Add-ons, Install from repository, PVR clients, et installe-le.</li>
+    <li>Onglet <b>General</b> : Location = <b>Remote Path (Internet address)</b>. Dans <b>M3U Play List URL</b>, écris l'adresse ci-dessous, puis OK.</li>
+    <li>Active l'add-on (<b>Enable</b>), puis ferme et rouvre Kodi.</li>
+    <li>Sur l'accueil de Kodi : <b>TV</b>, puis <b>Channels</b>. Haut et bas pour changer de chaîne, OK pour regarder, Retour pour revenir.</li>
+  </ol>
+  <div class="cap">Adresse à écrire</div>
+  <input id="tv-url" readonly>
+  <p class="hint" style="margin-top:.5rem">Elle contient la France, Israël et un groupe « Foot », sans les chaînes qui ne marchent pas. Pour écrire l'adresse sans clavier à l'écran, utilise l'onglet Clavier de ce téléphone.</p>
+  <div class="cap">Autres adresses</div>
+  <p class="hint"><span id="tv-b"></span>/foot.m3u : seulement le foot<br><span id="tv-c"></span>/il.m3u : seulement Israël<br><span id="tv-d"></span>/playlist.m3u?country=fr,il,ma : tes pays au choix (codes à 2 lettres)</p>
+  <p class="hint">Sans le relais, l'adresse directe marche aussi : https://iptv-org.github.io/iptv/countries/fr.m3u (un seul pays, sans filtre).</p>
+  <div class="grid"><button class="b acc" id="tv-close">Fermer</button></div>
 </div></div>
 
 <div id="toast" role="status" aria-live="polite"></div>
@@ -579,6 +600,15 @@ $("#upd").onclick=async()=>{toast("Recherche de mise à jour…");
   try{const r=await api("update",{});toast(r.ok?r.out:"Échec : "+String(r.out||"").slice(0,60));if(r.ok&&r.out==="Mis à jour")setTimeout(()=>location.reload(),2500)}catch(e){toast("Relais injoignable")}};
 $("#big").checked=store.get("big",false);document.documentElement.classList.toggle("big",$("#big").checked);
 $("#big").onchange=()=>{store.set("big",$("#big").checked);document.documentElement.classList.toggle("big",$("#big").checked)};
+(function(){
+  const base="http://127.0.0.1:"+(location.port||"80");
+  $("#tv-url").value=base+"/mix.m3u";
+  ["tv-b","tv-c","tv-d"].forEach(i=>$("#"+i).textContent=base);
+  $("#tv-url").addEventListener("focus",e=>e.target.select());
+  $("#tv-url").addEventListener("click",e=>e.target.select());
+  $("#tv-open").onclick=()=>openSheet("sh-tv");
+  $("#tv-close").onclick=()=>closeSheet("sh-tv");
+})();
 $("#help-open").onclick=$("#help2").onclick=()=>openSheet("sh-help");
 $("#help-close").onclick=()=>closeSheet("sh-help");
 $$(".sheet").forEach(s=>s.addEventListener("click",e=>{if(e.target===s)s.classList.remove("on")}));

@@ -266,6 +266,95 @@ def check_many(urls):
     with ThreadPoolExecutor(10) as ex:
         return dict(zip(urls, ex.map(check_url, urls)))
 
+# ---------------------------------------------------------------- Liste de chaînes pour Kodi (sans iPhone)
+
+DEFAULT_COUNTRIES = [c for c in re.split(r"[ ,]+", os.environ.get("X96_COUNTRIES", "fr,il").lower()) if re.match(r"^[a-z]{2}$", c)]
+_dead = {}          # url -> heure à laquelle elle a été vue morte
+_warming = False
+
+def _is_dead(u):
+    t = _dead.get(u)
+    return bool(t) and time.time() - t < 12 * 3600
+
+def warm(urls):
+    """Teste les flux en arrière-plan. Les listes suivantes cachent ceux qui ne répondent pas."""
+    global _warming
+    if _warming:
+        return
+    _warming = True
+    def run():
+        global _warming
+        try:
+            res = {}
+            with ThreadPoolExecutor(10) as ex:
+                for u, ok in zip(urls, ex.map(check_url, urls)):
+                    res[u] = ok
+            bad = [u for u, ok in res.items() if not ok]
+            if len(res) >= 10 and len(bad) > 0.9 * len(res):
+                return          # probablement un problème de réseau, on ne cache rien
+            now = time.time()
+            for u, ok in res.items():
+                if ok:
+                    _dead.pop(u, None)
+                else:
+                    _dead[u] = now
+        finally:
+            _warming = False
+    threading.Thread(target=run, daemon=True).start()
+
+def build_playlist(countries, foot=True, only_foot=False, alive=True):
+    countries = [c for c in countries if re.match(r"^[a-z]{2}$", c)][:6] or DEFAULT_COUNTRIES
+    items = []
+    for cc in countries:
+        try:
+            lst = parse_m3u(fetch(IPTV + f"countries/{cc}.m3u"))
+        except Exception:
+            continue
+        for c in lst:
+            c = dict(c)
+            g = c.get("group") or "Autres"
+            c["group"] = f"{cc.upper()} · {g}" if len(countries) > 1 else g
+            items.append(c)
+    if foot:
+        rx = re.compile(r"\.(%s)(@|$)" % "|".join(map(re.escape, countries)), re.I)
+        try:
+            items += [dict(c) for c in parse_m3u(fetch(IPTV + "categories/sports.m3u")) if rx.search(c.get("id", ""))]
+        except Exception:
+            pass
+    seen, out = set(), []
+    for c in items:
+        if c["url"] in seen:
+            continue
+        seen.add(c["url"])
+        if foot and FOOT.search(c["name"]):
+            c["group"] = "Foot"
+        elif only_foot:
+            continue
+        out.append(c)
+    if alive:
+        warm([c["url"] for c in out if c["url"] not in _alive][:600])
+        out = [c for c in out if not _is_dead(c["url"])]
+    out.sort(key=lambda c: (c["group"] != "Foot", c["group"], c["name"].lower()))
+    q = lambda s: str(s).replace('"', "'").replace("\n", " ")
+    lines = ["#EXTM3U"]
+    for c in out:
+        lines.append('#EXTINF:-1 tvg-id="%s" tvg-logo="%s" group-title="%s",%s' % (q(c.get("id", "")), q(c.get("logo", "")), q(c["group"]), q(c["name"])))
+        lines.append(c["url"])
+    return "\n".join(lines) + "\n"
+
+def playlist_for(path, q):
+    name = path[1:-4]
+    if name == "mix":
+        args = dict(countries=DEFAULT_COUNTRIES, foot=True, only_foot=False)
+    elif name == "foot":
+        args = dict(countries=DEFAULT_COUNTRIES, foot=True, only_foot=True)
+    elif name == "playlist":
+        cs = [c for c in re.split(r"[ ,]+", q.get("country", "").lower()) if c]
+        args = dict(countries=cs or DEFAULT_COUNTRIES, foot=q.get("foot", "1") == "1", only_foot=q.get("only", "0") == "1")
+    else:
+        args = dict(countries=[name], foot=q.get("foot", "0") == "1", only_foot=False)
+    return build_playlist(alive=q.get("alive", "1") != "0", **args)
+
 # ---------------------------------------------------------------- HTTP
 
 class H(BaseHTTPRequestHandler):
@@ -286,6 +375,12 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query, keep_blank_values=True).items()}
+        if u.path == "/playlist.m3u" or re.match(r"^/(mix|foot|[a-z]{2})\.m3u$", u.path):
+            try:
+                body = playlist_for(u.path, q).encode("utf-8")
+            except Exception as e:
+                return self.send(502, {"ok": False, "error": str(e)})
+            return self.send(200, body, "audio/x-mpegurl; charset=utf-8")
         try:
             if u.path == "/api/status":
                 return self.send(200, {"connected": is_connected(), "target": TARGET, "mode": MODE,
@@ -355,6 +450,16 @@ class H(BaseHTTPRequestHandler):
 
 VERSION = version()
 
+def prewarm():
+    """Au démarrage : prépare la liste pour Kodi (teste les flux), en réessayant tant que le réseau n'est pas prêt."""
+    for _ in range(12):
+        try:
+            if any(l.startswith("http") for l in build_playlist(DEFAULT_COUNTRIES).splitlines()):
+                return
+        except Exception:
+            pass
+        time.sleep(30)
+
 def keep_connected():
     """Se reconnecte seul à la box (utile au démarrage, quand l'ADB met du temps à être prêt)."""
     while True:
@@ -382,4 +487,5 @@ if __name__ == "__main__":
     print("mode:", MODE, "| connexion:", connect(), "| version:", VERSION, "| PIN:", "oui" if PIN else "non")
     print(f"Ouvre http://<ip-de-la-box>:{PORT} sur ton iPhone")
     threading.Thread(target=keep_connected, daemon=True).start()
+    threading.Thread(target=prewarm, daemon=True).start()
     srv.serve_forever()
