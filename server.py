@@ -568,6 +568,10 @@ if __name__ == "__main__":
         print(f"Le relais tourne déjà sur le port {PORT}. Rien à faire.")
         sys.exit(0)
     try:
+        subprocess.run(["termux-wake-lock"], timeout=5)   # empêche Android d'endormir Termux (sans effet hors Termux)
+    except Exception:
+        pass
+    try:
         _ok, _msg, _rs = update()
         print("mise à jour:", _msg)
         if _rs:
